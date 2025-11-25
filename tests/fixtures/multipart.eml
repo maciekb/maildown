@@ -1,0 +1,31 @@
+From: Jan Kowalski <jan@example.com>
+To: Anna Nowak <anna@example.com>
+Subject: Multipart email
+Date: Sun, 17 Mar 2024 09:00:00 +0100
+Message-ID: <multi789@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="boundary123"
+
+--boundary123
+Content-Type: text/plain; charset="utf-8"
+
+Hello Anna,
+
+This is the plain text version of the email.
+
+Best,
+Jan
+
+--boundary123
+Content-Type: text/html; charset="utf-8"
+
+<!DOCTYPE html>
+<html>
+<body>
+<p>Hello Anna,</p>
+<p>This is the <em>HTML version</em> of the email.</p>
+<p>Best,<br>Jan</p>
+</body>
+</html>
+
+--boundary123--

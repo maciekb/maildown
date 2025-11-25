@@ -1,0 +1,19 @@
+From: Jan Kowalski <jan@example.com>
+To: Anna Nowak <anna@example.com>
+Subject: HTML email test
+Date: Sat, 16 Mar 2024 14:00:00 +0100
+Message-ID: <html456@example.com>
+Content-Type: text/html; charset="utf-8"
+
+<!DOCTYPE html>
+<html>
+<body>
+<h1>Hello Anna</h1>
+<p>This is an <strong>HTML</strong> email with:</p>
+<ul>
+<li>Formatted text</li>
+<li>A list</li>
+</ul>
+<p>Best regards,<br>Jan</p>
+</body>
+</html>

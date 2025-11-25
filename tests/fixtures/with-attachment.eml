@@ -1,0 +1,27 @@
+From: Jan Kowalski <jan@example.com>
+To: Anna Nowak <anna@example.com>
+Subject: Email with attachment
+Date: Mon, 18 Mar 2024 11:30:00 +0100
+Message-ID: <attach101@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="mixed_boundary"
+
+--mixed_boundary
+Content-Type: text/plain; charset="utf-8"
+
+Hello Anna,
+
+Please find the attachment below.
+
+Best,
+Jan
+
+--mixed_boundary
+Content-Type: text/plain; charset="utf-8"
+Content-Disposition: attachment; filename="notes.txt"
+
+These are some notes in the attachment.
+Line 2 of notes.
+Line 3 of notes.
+
+--mixed_boundary--

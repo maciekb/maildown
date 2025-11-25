@@ -1,0 +1,256 @@
+"""Convert parsed email to Markdown format."""
+
+import base64
+import re
+import unicodedata
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+
+from markdownify import markdownify
+
+from maildown.parser import Attachment, ParsedEmail
+
+
+class AttachmentMode(Enum):
+    """How to handle attachments."""
+
+    IGNORE = "ignore"
+    LIST = "list"
+    EXTRACT = "extract"
+    EMBED = "embed"
+
+
+@dataclass
+class ConversionOptions:
+    """Options for converting email to Markdown."""
+
+    prefer_html: bool = False
+    include_frontmatter: bool = True
+    include_headers: list[str] | None = None  # None = all standard headers
+    attachment_mode: AttachmentMode = AttachmentMode.LIST
+    attachments_dir: str = "attachments"
+
+    def __post_init__(self):
+        if self.include_headers is None:
+            self.include_headers = ["from", "to", "date", "subject", "cc", "message_id"]
+
+
+# Characters that don't decompose in NFKD but have ASCII equivalents
+_CHAR_MAP = {
+    "ł": "l",
+    "Ł": "L",
+    "ø": "o",
+    "Ø": "O",
+    "đ": "d",
+    "Đ": "D",
+    "ß": "ss",
+    "æ": "ae",
+    "Æ": "AE",
+    "œ": "oe",
+    "Œ": "OE",
+}
+
+
+def slugify(text: str) -> str:
+    """Convert text to URL-friendly slug.
+
+    Args:
+        text: Text to convert.
+
+    Returns:
+        Slugified text.
+    """
+    if not text:
+        return ""
+    # Replace special characters that don't decompose
+    for char, replacement in _CHAR_MAP.items():
+        text = text.replace(char, replacement)
+    # Normalize unicode characters
+    text = unicodedata.normalize("NFKD", text)
+    # Convert to ASCII, ignoring errors
+    text = text.encode("ascii", "ignore").decode("ascii")
+    # Convert to lowercase
+    text = text.lower()
+    # Replace any non-alphanumeric characters with hyphens
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    # Remove leading/trailing hyphens
+    text = text.strip("-")
+    # Limit length
+    return text[:100] if len(text) > 100 else text
+
+
+def format_size(size_bytes: int) -> str:
+    """Format file size in human-readable format."""
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+
+
+def convert_to_markdown(
+    email: ParsedEmail,
+    options: ConversionOptions | None = None,
+    attachment_base_path: str | None = None,
+) -> str:
+    """Convert parsed email to Markdown format.
+
+    Args:
+        email: Parsed email data.
+        options: Conversion options.
+        attachment_base_path: Base path for attachment links (used with extract mode).
+
+    Returns:
+        Markdown formatted string.
+    """
+    if options is None:
+        options = ConversionOptions()
+
+    parts = []
+
+    # Build frontmatter
+    if options.include_frontmatter:
+        metadata = _build_frontmatter(email, options)
+        fm_lines = ["---"]
+        for key, value in metadata.items():
+            # Quote values that contain special YAML characters
+            if any(c in str(value) for c in [":", "<", ">", "[", "]", "{", "}", "#", "&", "*", "!", "|", "'", '"']):
+                # Use double quotes and escape internal quotes
+                escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+                fm_lines.append(f'{key}: "{escaped}"')
+            else:
+                fm_lines.append(f"{key}: {value}")
+        fm_lines.append("---")
+        parts.append("\n".join(fm_lines))
+
+    # Add title
+    if email.subject:
+        parts.append(f"\n# {email.subject}\n")
+
+    # Add body
+    body = _get_body(email, options)
+    if body:
+        parts.append(body)
+
+    # Add attachments section
+    if email.attachments and options.attachment_mode != AttachmentMode.IGNORE:
+        attachments_md = _format_attachments(email.attachments, options, attachment_base_path)
+        if attachments_md:
+            parts.append(attachments_md)
+
+    return "\n".join(parts)
+
+
+def _build_frontmatter(email: ParsedEmail, options: ConversionOptions) -> dict:
+    """Build frontmatter metadata dictionary."""
+    metadata = {}
+    headers = options.include_headers or []
+
+    if "date" in headers and email.date:
+        metadata["date"] = email.date.isoformat()
+    if "from" in headers and email.from_address:
+        metadata["from"] = email.from_address
+    if "to" in headers and email.to_address:
+        metadata["to"] = email.to_address
+    if "subject" in headers and email.subject:
+        metadata["subject"] = email.subject
+    if "cc" in headers and email.cc:
+        metadata["cc"] = email.cc
+    if "bcc" in headers and email.bcc:
+        metadata["bcc"] = email.bcc
+    if "message_id" in headers and email.message_id:
+        metadata["message_id"] = email.message_id
+
+    return metadata
+
+
+def _get_body(email: ParsedEmail, options: ConversionOptions) -> str:
+    """Get email body, converting HTML if needed."""
+    if options.prefer_html:
+        if email.body_html:
+            return markdownify(email.body_html, heading_style="ATX", strip=["script", "style"])
+        return email.body_text or ""
+    else:
+        if email.body_text:
+            return email.body_text
+        if email.body_html:
+            return markdownify(email.body_html, heading_style="ATX", strip=["script", "style"])
+        return ""
+
+
+def _format_attachments(
+    attachments: list[Attachment],
+    options: ConversionOptions,
+    base_path: str | None,
+) -> str:
+    """Format attachments section."""
+    lines = ["\n## Attachments\n"]
+
+    for att in attachments:
+        size_str = format_size(att.size)
+
+        if options.attachment_mode == AttachmentMode.LIST:
+            lines.append(f"- {att.filename} ({size_str})")
+
+        elif options.attachment_mode == AttachmentMode.EXTRACT:
+            if base_path:
+                link_path = f"{base_path}/{att.filename}"
+            else:
+                link_path = f"./{options.attachments_dir}/{att.filename}"
+            lines.append(f"- [{att.filename}]({link_path}) ({size_str})")
+
+        elif options.attachment_mode == AttachmentMode.EMBED:
+            if _is_image(att.content_type) and att.size < 100_000:  # <100KB for embed
+                encoded = base64.b64encode(att.content).decode("ascii")
+                lines.append(f"\n![{att.filename}](data:{att.content_type};base64,{encoded})\n")
+            else:
+                # Too large or not an image - fall back to extract behavior
+                if base_path:
+                    link_path = f"{base_path}/{att.filename}"
+                else:
+                    link_path = f"./{options.attachments_dir}/{att.filename}"
+                lines.append(f"- [{att.filename}]({link_path}) ({size_str})")
+
+    return "\n".join(lines)
+
+
+def _is_image(content_type: str) -> bool:
+    """Check if content type is an image."""
+    return content_type.startswith("image/")
+
+
+def generate_filename(email: ParsedEmail, pattern: str = "{date}-{subject}") -> str:
+    """Generate output filename from pattern.
+
+    Supported placeholders:
+        - {date}: Date in YYYY-MM-DD format
+        - {datetime}: Date and time in YYYY-MM-DDTHH-MM-SS format
+        - {subject}: Slugified subject
+        - {from}: Slugified sender name
+        - {from_email}: Sender email address
+
+    Args:
+        email: Parsed email data.
+        pattern: Filename pattern with placeholders.
+
+    Returns:
+        Generated filename (without extension).
+    """
+    replacements = {
+        "{date}": email.date.strftime("%Y-%m-%d") if email.date else "unknown-date",
+        "{datetime}": email.date.strftime("%Y-%m-%dT%H-%M-%S") if email.date else "unknown-date",
+        "{subject}": slugify(email.subject) if email.subject else "no-subject",
+        "{from}": slugify(email.from_name) if email.from_name else "unknown-sender",
+        "{from_email}": email.from_email or "unknown@email",
+    }
+
+    result = pattern
+    for placeholder, value in replacements.items():
+        result = result.replace(placeholder, value)
+
+    # Sanitize any remaining invalid filename characters
+    result = re.sub(r'[<>:"/\\|?*]', "-", result)
+
+    return result
