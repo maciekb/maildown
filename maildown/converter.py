@@ -36,24 +36,8 @@ class ConversionOptions:
             self.include_headers = ["from", "to", "date", "subject", "cc", "message_id"]
 
 
-# Characters that don't decompose in NFKD but have ASCII equivalents
-_CHAR_MAP = {
-    "ł": "l",
-    "Ł": "L",
-    "ø": "o",
-    "Ø": "O",
-    "đ": "d",
-    "Đ": "D",
-    "ß": "ss",
-    "æ": "ae",
-    "Æ": "AE",
-    "œ": "oe",
-    "Œ": "OE",
-}
-
-
 def slugify(text: str) -> str:
-    """Convert text to URL-friendly slug.
+    """Convert text to URL-friendly slug, preserving UTF-8 characters.
 
     Args:
         text: Text to convert.
@@ -63,17 +47,17 @@ def slugify(text: str) -> str:
     """
     if not text:
         return ""
-    # Replace special characters that don't decompose
-    for char, replacement in _CHAR_MAP.items():
-        text = text.replace(char, replacement)
-    # Normalize unicode characters
-    text = unicodedata.normalize("NFKD", text)
-    # Convert to ASCII, ignoring errors
-    text = text.encode("ascii", "ignore").decode("ascii")
+    # Normalize unicode (NFC for consistent representation)
+    text = unicodedata.normalize("NFC", text)
     # Convert to lowercase
     text = text.lower()
-    # Replace any non-alphanumeric characters with hyphens
-    text = re.sub(r"[^a-z0-9]+", "-", text)
+    # Replace any non-word characters (except hyphens) with hyphens
+    # \w with re.UNICODE includes letters from all languages
+    text = re.sub(r"[^\w-]+", "-", text, flags=re.UNICODE)
+    # Replace underscores with hyphens
+    text = text.replace("_", "-")
+    # Collapse multiple hyphens
+    text = re.sub(r"-+", "-", text)
     # Remove leading/trailing hyphens
     text = text.strip("-")
     # Limit length

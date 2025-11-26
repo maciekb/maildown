@@ -22,7 +22,7 @@ class TestSlugify:
         assert slugify("Test: Email!") == "test-email"
 
     def test_handles_polish_chars(self):
-        assert slugify("zażółć gęślą jaźń") == "zazolc-gesla-jazn"
+        assert slugify("zażółć gęślą jaźń") == "zażółć-gęślą-jaźń"
 
     def test_empty_string(self):
         assert slugify("") == ""
