@@ -5,7 +5,6 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 
 from markdownify import markdownify
 
@@ -100,7 +99,10 @@ def convert_to_markdown(
         fm_lines = ["---"]
         for key, value in metadata.items():
             # Quote values that contain special YAML characters
-            if any(c in str(value) for c in [":", "<", ">", "[", "]", "{", "}", "#", "&", "*", "!", "|", "'", '"']):
+            if any(
+                c in str(value)
+                for c in [":", "<", ">", "[", "]", "{", "}", "#", "&", "*", "!", "|", "'", '"']
+            ):
                 # Use double quotes and escape internal quotes
                 escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
                 fm_lines.append(f'{key}: "{escaped}"')

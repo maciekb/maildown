@@ -2,7 +2,12 @@
 
 from pathlib import Path
 
-from maildown.converter import AttachmentMode, ConversionOptions, convert_to_markdown, generate_filename
+from maildown.converter import (
+    AttachmentMode,
+    ConversionOptions,
+    convert_to_markdown,
+    generate_filename,
+)
 from maildown.parser import ParsedEmail
 
 
