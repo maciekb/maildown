@@ -85,6 +85,10 @@ Markdown and extracted attachments:
   its files when a conflict is found during preflight.
 - `rename`: choose the first free `_1`, `_2`, … suffix before the extension.
   Renaming the Markdown file also changes its attachment subdirectory.
+  When extracting attachments, skip Markdown candidates whose stem-specific
+  attachment directory is an existing or reserved file, even if the Markdown
+  file itself is absent. A blocked common ancestor (such as `attachments`),
+  symlinks, or a hardlinked stem blocker still fail rather than triggering retries.
 - `overwrite`: explicitly replace existing regular files. Directories and
   symlinks are never overwritten; regular files with multiple hardlinks are
   rejected during planning and rechecked immediately before overwrite.

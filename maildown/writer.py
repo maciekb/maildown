@@ -53,7 +53,21 @@ def plan_write(
         shared = ReservationIndex(files, {parent for path in files for parent in path.parents})
     delta = ReservationIndex()
 
-    def reserve(path: Path) -> Path:
+    def namespace_blocked(path: Path) -> bool:
+        """Only a stem-specific blocker can be avoided by another Markdown name."""
+        folder = path.parent / options.attachments_dir / path.stem
+        _reject_symlinks(folder)
+        for parent in folder.resolve().parents:
+            if parent.exists() and not parent.is_dir():
+                raise NotADirectoryError(f"Output ancestor is not a directory: {parent}")
+        if folder.resolve() in shared.files or (folder.exists() and not folder.is_dir()):
+            _reject_hardlinks(folder)
+            if on_conflict != "rename":
+                raise NotADirectoryError(f"Output ancestor is not a directory: {folder}")
+            return True
+        return False
+
+    def reserve(path: Path, *, check_namespace: bool = False) -> Path:
         _reject_symlinks(path)
         for parent in path.resolve().parents:
             if (
@@ -71,6 +85,7 @@ def plan_write(
             or canonical in delta.files
             or canonical in shared.directories
             or canonical in delta.directories
+            or (check_namespace and namespace_blocked(path))
         ):
             if (
                 on_conflict == "overwrite"
@@ -88,23 +103,28 @@ def plan_write(
             path = original.with_name(f"{original.stem}_{counter}{original.suffix}")
             _reject_symlinks(path)
             canonical = path.resolve()
+        # Rejected candidates never enter the local delta; only the complete
+        # successful email plan below commits that delta to shared reservations.
         delta.files.add(canonical)
         delta.directories.update(canonical.parents)
         return path
 
-    output_path = reserve(output_path)
-    attachments = {}
+    extracts = False
+    directory = Path(options.attachments_dir)
     if email.attachments and options.attachment_mode in (
         AttachmentMode.EXTRACT,
         AttachmentMode.EMBED,
     ):
-        directory = Path(options.attachments_dir)
         if (
             directory.is_absolute()
             or ".." in directory.parts
             or any(c in options.attachments_dir for c in "\\:\x00")
         ):
             raise ValueError("Unsafe attachment directory")
+        extracts = any(not should_embed(attachment, options) for attachment in email.attachments)
+    output_path = reserve(output_path, check_namespace=extracts)
+    attachments = {}
+    if extracts:
         folder = output_path.parent / directory / output_path.stem
         for index, attachment in enumerate(email.attachments):
             if should_embed(attachment, options):
