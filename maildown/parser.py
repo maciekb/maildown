@@ -131,9 +131,14 @@ def _get_text_content(part) -> str | None:
         return None
 
 
+def attachment_fallback_name(index: int) -> str:
+    """Deterministic filename for a zero-based attachment position."""
+    return f"attachment_{index + 1}.bin"
+
+
 def _extract_attachment(part, result: ParsedEmail) -> None:
     """Extract attachment from email part."""
-    filename = part.get_filename() or "unnamed_attachment"
+    filename = part.get_filename() or attachment_fallback_name(len(result.attachments))
     content_type = part.get_content_type()
 
     try:
