@@ -87,7 +87,7 @@ def test_attachment_path_overrides_win_unchanged(name):
     assert link_url(markdown) == quote(override[0], safe="/")
 
 
-@pytest.mark.parametrize("name", ["report.txt", "image 1.png", "zażółć.txt", "report #?%().txt"])
+@pytest.mark.parametrize("name", ["report.txt", "image 1.png", "zażółć.txt", "report #%().txt"])
 def test_safe_names_keep_filename_links(name):
     from urllib.parse import quote
 

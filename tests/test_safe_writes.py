@@ -30,7 +30,7 @@ def test_default_conflicts_fail_without_partial_writes(tmp_path, target):
 def test_links_follow_attachment_identity_and_quote_urls(tmp_path):
     from urllib.parse import quote
 
-    name = "report #?%().txt"
+    name = "report #%().txt"
     email = message(name, name, "../unsafe")
     email.attachments[1].content = b"second"
     folder = tmp_path / "attachments" / "mail"
@@ -43,9 +43,9 @@ def test_links_follow_attachment_identity_and_quote_urls(tmp_path):
         on_conflict="rename",
     )
     text = output.read_text()
-    for filename in ["report #?%()_1.txt", "report #?%()_2.txt", "attachment_3.bin"]:
+    for filename in ["report #%()_1.txt", "report #%()_2.txt", "attachment_3.bin"]:
         assert f"({quote('./attachments/mail/' + filename, safe='/')})" in text
-    assert (folder / "report #?%()_2.txt").read_bytes() == b"second"
+    assert (folder / "report #%()_2.txt").read_bytes() == b"second"
     assert (folder / name).read_bytes() == b"existing"
 
 

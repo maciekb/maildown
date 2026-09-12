@@ -66,10 +66,15 @@ maildown email.eml -p "{date}-{subject}"   # → 2024-03-15-meeting-notes.md
 
 Extracted files live in `DIR/<final-markdown-stem>/` beside the Markdown file
 (`DIR` defaults to `attachments`). `--attachments-dir` must be a relative path
-without `..`, Windows drive syntax, or backslashes. Nested relative directories
-are supported. Unsafe attachment names (empty, dot/dot-dot, path separators,
-colon, or NUL) become `attachment_<1-based-position>.bin` deterministically.
-Missing or empty MIME filenames use the same positional fallback during parsing.
+whose components are portable filenames: no `..` or `.` components, Windows
+drive syntax, backslashes, Windows-reserved names (`CON`, `PRN`, `AUX`, `NUL`,
+`COM1`–`COM9`, `LPT1`–`LPT9`, case-insensitive, with or without an extension),
+the characters `< > " | ? *`, or trailing dots/spaces. Nested relative
+directories are supported. Unsafe attachment names — empty, dot/dot-dot, path
+separators, colon, NUL, Windows-reserved names, the characters `< > " | ? *`,
+or a trailing dot/space — become `attachment_<1-based-position>.bin`
+deterministically. Missing or empty MIME filenames use the same positional
+fallback during parsing.
 Links use each attachment's actual final filename, with URL special characters
 percent-encoded, including renamed duplicates. The original name remains the
 link label. When no final filename is supplied (direct `convert_to_markdown`
@@ -115,7 +120,10 @@ should share a `maildown.writer.ReservationIndex` across calls; the legacy
 Destinations are compared with the filesystem's own case semantics: on
 case-insensitive filesystems (the macOS/Windows default) names differing only
 in case collide, detected once with a read-only probe of the nearest existing
-directory ancestor; case-sensitive filesystems are unchanged.
+directory ancestor; case-sensitive filesystems are unchanged. A shared
+`ReservationIndex` serves a single filesystem: planning into a destination
+whose probe disagrees with the index's remembered case semantics fails before
+any reservation is committed, so use a separate index per filesystem.
 Failed plans do not commit reservations. Reservations from a successful plan
 remain if a later write fails, since partial files may already exist.
 

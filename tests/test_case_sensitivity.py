@@ -13,6 +13,20 @@ from maildown.writer import write_markdown
 EXTRACT = ConversionOptions(attachment_mode=AttachmentMode.EXTRACT)
 
 
+@pytest.fixture
+def macos_probe(monkeypatch):
+    """Make the destination probe agree with forced case-insensitive indexes."""
+    monkeypatch.setattr(writer, "_case_probe_cache", {})
+    monkeypatch.setattr(writer, "probe_case_insensitive", lambda path: True)
+
+
+@pytest.fixture
+def sensitive_probe(monkeypatch):
+    """Make the destination probe agree with forced case-sensitive indexes."""
+    monkeypatch.setattr(writer, "_case_probe_cache", {})
+    monkeypatch.setattr(writer, "probe_case_insensitive", lambda path: False)
+
+
 def snapshot(root: Path):
     return sorted((str(path.relative_to(root)), path.is_dir()) for path in root.rglob("*"))
 
@@ -103,7 +117,7 @@ def case_variant_email():
 
 
 class TestFoldedReservations:
-    def test_same_email_case_variant_attachments_conflict(self, tmp_path):
+    def test_same_email_case_variant_attachments_conflict(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
         with pytest.raises(FileExistsError):
             write_markdown(case_variant_email(), tmp_path / "mail.md", EXTRACT, reservations=index)
@@ -111,7 +125,7 @@ class TestFoldedReservations:
         assert index.files == set()
         assert index.folded_files == set()
 
-    def test_rename_policy_keeps_case_variant_attachments_distinct(self, tmp_path):
+    def test_rename_policy_keeps_case_variant_attachments_distinct(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
         output = write_markdown(
             case_variant_email(),
@@ -127,7 +141,7 @@ class TestFoldedReservations:
         assert "(./attachments/mail/foo.txt)" in text
         assert "(./attachments/mail/FOO_1.txt)" in text
 
-    def test_overwrite_policy_still_rejects_case_variant_duplicates(self, tmp_path):
+    def test_overwrite_policy_still_rejects_case_variant_duplicates(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
         with pytest.raises(FileExistsError):
             write_markdown(
@@ -140,7 +154,9 @@ class TestFoldedReservations:
         assert not list(tmp_path.iterdir())
         assert index.files == set() and index.folded_files == set()
 
-    def test_overwrite_rejects_duplicates_when_case_variant_exists_on_disk(self, tmp_path):
+    def test_overwrite_rejects_duplicates_when_case_variant_exists_on_disk(
+        self, tmp_path, macos_probe
+    ):
         index = writer.ReservationIndex(case_insensitive=True)
         folder = tmp_path / "attachments" / "mail"
         folder.mkdir(parents=True)
@@ -157,7 +173,7 @@ class TestFoldedReservations:
         assert not (tmp_path / "mail.md").exists()
         assert not (folder / "foo.txt").exists()
 
-    def test_forced_case_sensitive_index_plans_both_variants(self, tmp_path):
+    def test_forced_case_sensitive_index_plans_both_variants(self, tmp_path, sensitive_probe):
         index = writer.ReservationIndex(case_insensitive=False)
         output = write_markdown(
             case_variant_email(), tmp_path / "mail.md", EXTRACT, reservations=index
@@ -183,7 +199,9 @@ class TestFoldedReservations:
         assert (folder / "FOO.txt").read_bytes() == b"two"
         assert "(./attachments/mail/FOO.txt)" in output.read_text()
 
-    def test_batch_shared_index_detects_case_variant_output_across_emails(self, tmp_path):
+    def test_batch_shared_index_detects_case_variant_output_across_emails(
+        self, tmp_path, macos_probe
+    ):
         index = writer.ReservationIndex(case_insensitive=True)
         first = ParsedEmail(attachments=[Attachment("foo.txt", "text/plain", 3, b"one")])
         writer.plan_write(first, tmp_path / "mail.md", EXTRACT, reservations=index)
@@ -192,7 +210,7 @@ class TestFoldedReservations:
             writer.plan_write(second, tmp_path / "MAIL.md", EXTRACT, reservations=index)
         assert not list(tmp_path.iterdir())
 
-    def test_batch_reserved_attachment_blocks_case_variant_destination(self, tmp_path):
+    def test_batch_reserved_attachment_blocks_case_variant_destination(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
         first = ParsedEmail(attachments=[Attachment("foo.txt", "text/plain", 3, b"one")])
         writer.plan_write(first, tmp_path / "mail.md", EXTRACT, reservations=index)
@@ -200,7 +218,7 @@ class TestFoldedReservations:
         with pytest.raises(FileExistsError):
             writer.plan_write(ParsedEmail(), target, EXTRACT, reservations=index)
 
-    def test_cli_dry_run_reports_case_variant_collision(self, tmp_path, monkeypatch):
+    def test_cli_dry_run_reports_case_variant_collision(self, tmp_path, monkeypatch, macos_probe):
         from click.testing import CliRunner
 
         from maildown import cli as cli_module
@@ -243,7 +261,7 @@ class TestFoldedReservations:
         assert index.case_insensitive is True
         assert writer._fold_key(reserved) in index.folded_files
 
-    def test_rename_plan_commits_exactly_the_final_folded_destinations(self, tmp_path):
+    def test_rename_plan_commits_exactly_the_final_folded_destinations(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
         write_markdown(
             case_variant_email(),
@@ -261,7 +279,7 @@ class TestFoldedReservations:
         assert index.folded_files == {writer._fold_key(path) for path in index.files}
         assert index.folded_directories == {writer._fold_key(path) for path in index.directories}
 
-    def test_stem_namespace_blocked_by_case_variant_reserved_file(self, tmp_path):
+    def test_stem_namespace_blocked_by_case_variant_reserved_file(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
         writer.plan_write(
             ParsedEmail(), tmp_path / "attachments" / "MAIL", EXTRACT, reservations=index

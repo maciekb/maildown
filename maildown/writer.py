@@ -12,7 +12,7 @@ from maildown.converter import (
     generate_filename,
     should_embed,
 )
-from maildown.parser import ParsedEmail, safe_attachment_name
+from maildown.parser import ParsedEmail, _is_portable_filename, safe_attachment_name
 
 
 def _platform_case_insensitive_default() -> bool:
@@ -97,9 +97,20 @@ class ReservationIndex:
     _folded_seeded: bool = field(default=False, repr=False, compare=False)
 
     def ensure_case_insensitive(self, probe_path: Path) -> bool:
-        """Detect case semantics once, and seed folded keys on the transition."""
+        """Detect case semantics once, and seed folded keys on the transition.
+
+        A shared index serves a single filesystem: when a plan's destination
+        probe disagrees with the remembered verdict, raise before any
+        reservation for that plan is committed.
+        """
+        verdict = probe_case_insensitive(probe_path)
         if self.case_insensitive is None:
-            self.case_insensitive = probe_case_insensitive(probe_path)
+            self.case_insensitive = verdict
+        elif self.case_insensitive != verdict:
+            raise ValueError(
+                "Destinations span filesystems with different case semantics; "
+                "use a separate ReservationIndex per filesystem"
+            )
         if self.case_insensitive and not self._folded_seeded:
             self.folded_files.update(_fold_key(path) for path in self.files)
             self.folded_directories.update(_fold_key(path) for path in self.directories)
@@ -113,6 +124,26 @@ class WritePlan:
 
     output_path: Path
     attachments: dict[int, Path]
+
+
+def _is_portable_component(component: str) -> bool:
+    """Report whether *component* is a portable path component on Windows."""
+    if not component or component in (".", ".."):
+        return False
+    return _is_portable_filename(component)
+
+
+def _portable_attachments_dir(attachments_dir: str) -> bool:
+    """Report whether every *attachments_dir* component is portable.
+
+    A bare ``.`` keeps the CLI's "extract beside the Markdown file" mode;
+    pathlib drops it when joining, so it never reaches the filesystem as a
+    directory name. Any other ``.`` component (or empty component from ``//``)
+    is rejected along with the other unportable names.
+    """
+    if attachments_dir == ".":
+        return True
+    return all(_is_portable_component(component) for component in attachments_dir.split("/"))
 
 
 def plan_write(
@@ -169,6 +200,11 @@ def plan_write(
         return False
 
     def reserve(path: Path, *, check_namespace: bool = False) -> Path:
+        # Normalize lexically once so exists()/is_symlink() checks, index keys,
+        # and the returned plan path never carry ``..`` or redundant separators
+        # (symlinked ancestors are already rejected by _reject_symlinks, which
+        # makes lexical normalization filesystem-consistent here).
+        path = Path(os.path.normpath(path))
         _reject_symlinks(path)
         for parent in path.resolve().parents:
             if known_file(parent) or (parent.exists() and not parent.is_dir()):
@@ -214,6 +250,7 @@ def plan_write(
         if (
             directory.is_absolute()
             or ".." in directory.parts
+            or not _portable_attachments_dir(options.attachments_dir)
             or any(c in options.attachments_dir for c in "\\:\x00")
         ):
             raise ValueError("Unsafe attachment directory")

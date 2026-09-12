@@ -136,14 +136,42 @@ def attachment_fallback_name(index: int) -> str:
     return f"attachment_{index + 1}.bin"
 
 
-def safe_attachment_name(name: str | None, index: int) -> str:
-    """Return *name* unchanged when it is safe, else the positional fallback.
+_WINDOWS_RESERVED = frozenset(
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{number}" for number in range(1, 10)),
+        *(f"LPT{number}" for number in range(1, 10)),
+    }
+)
 
-    Names that are empty, dot/dot-dot, or contain path separators, a colon,
-    or a NUL byte cannot be used as a filename and get the deterministic
-    ``attachment_<1-based-position>.bin`` fallback for *index*.
+
+def _is_portable_filename(name: str) -> bool:
+    """Report whether *name* is a portable filename on Windows and POSIX."""
+    if name.split(".")[0].upper() in _WINDOWS_RESERVED:
+        return False
+    if name != name.rstrip(". "):
+        return False
+    return not any(char in name for char in '<>"|?*')
+
+
+def safe_attachment_name(name: str | None, index: int) -> str:
+    """Return *name* unchanged when it is a portable filename, else the fallback.
+
+    Names that are empty, dot/dot-dot, contain path separators, a colon, or a
+    NUL byte, Windows-reserved device names (``CON``, ``COM1``…, with or
+    without an extension), the forbidden characters ``< > " | ? *``, or a
+    trailing dot or space cannot be used as a portable filename and get the
+    deterministic ``attachment_<1-based-position>.bin`` fallback for *index*.
     """
-    if not name or name in (".", "..") or any(c in name for c in "/\\:\x00"):
+    if (
+        not name
+        or name in (".", "..")
+        or any(c in name for c in "/\\:\x00")
+        or not _is_portable_filename(name)
+    ):
         return attachment_fallback_name(index)
     return name
 
