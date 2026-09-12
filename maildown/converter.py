@@ -160,16 +160,11 @@ def _build_frontmatter(email: ParsedEmail, options: ConversionOptions) -> dict:
 
 def _get_body(email: ParsedEmail, options: ConversionOptions) -> str:
     """Get email body, converting HTML if needed."""
-    if options.prefer_html:
-        if email.body_html:
-            return markdownify(email.body_html, heading_style="ATX", strip=["script", "style"])
-        return email.body_text or ""
-    else:
-        if email.body_text:
-            return email.body_text
-        if email.body_html:
-            return markdownify(email.body_html, heading_style="ATX", strip=["script", "style"])
-        return ""
+    if not options.prefer_html and email.body_text:
+        return email.body_text
+    if email.body_html:
+        return markdownify(email.body_html, heading_style="ATX", strip=["script", "style"])
+    return email.body_text or ""
 
 
 def _attachment_link_path(
@@ -210,20 +205,14 @@ def _format_attachments(
         if options.attachment_mode == AttachmentMode.LIST:
             lines.append(f"- {att.filename} ({size_str})")
 
-        elif options.attachment_mode == AttachmentMode.EXTRACT:
+        elif should_embed(att, options):
+            encoded = base64.b64encode(att.content).decode("ascii")
+            lines.append(f"\n![{label}](data:{att.content_type};base64,{encoded})\n")
+
+        elif options.attachment_mode in (AttachmentMode.EXTRACT, AttachmentMode.EMBED):
             link_path = _attachment_link_path(index, att, options, base_path, attachment_paths)
             link_path = quote(link_path, safe="/")
             lines.append(f"- [{label}]({link_path}) ({size_str})")
-
-        elif options.attachment_mode == AttachmentMode.EMBED:
-            if should_embed(att, options):
-                encoded = base64.b64encode(att.content).decode("ascii")
-                lines.append(f"\n![{label}](data:{att.content_type};base64,{encoded})\n")
-            else:
-                # Too large or not an image - fall back to extract behavior
-                link_path = _attachment_link_path(index, att, options, base_path, attachment_paths)
-                link_path = quote(link_path, safe="/")
-                lines.append(f"- [{label}]({link_path}) ({size_str})")
 
     return "\n".join(lines)
 
