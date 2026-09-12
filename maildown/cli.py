@@ -2,7 +2,6 @@
 
 import glob
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -11,18 +10,6 @@ from maildown import __version__
 from maildown.converter import AttachmentMode, ConversionOptions
 from maildown.parser import parse_eml
 from maildown.writer import ReservationIndex, determine_output_path, plan_write, write_markdown
-
-
-@dataclass
-class ProcessingResult:
-    """Result of processing files."""
-
-    success: int = 0
-    errors: list[tuple[Path, str]] = None
-
-    def __post_init__(self):
-        if self.errors is None:
-            self.errors = []
 
 
 def collect_files(inputs: tuple[str, ...], recursive: bool) -> list[Path]:
@@ -155,7 +142,8 @@ def main(
             base_input_dir = base_path
 
     # Process files
-    result = ProcessingResult()
+    success = 0
+    errors: list[tuple[Path, str]] = []
     reservations = ReservationIndex()
 
     for file_path in files:
@@ -191,11 +179,11 @@ def main(
                 if not quiet:
                     click.echo(f"Created: {output_path}")
 
-            result.success += 1
+            success += 1
 
         except Exception as e:
             error_msg = str(e)
-            result.errors.append((file_path, error_msg))
+            errors.append((file_path, error_msg))
 
             click.echo(f"Error processing {file_path}: {error_msg}", err=True)
 
@@ -204,18 +192,18 @@ def main(
 
     # Print summary
     if not quiet:
-        click.echo(f"\nProcessed: {result.success + len(result.errors)} files", err=True)
+        click.echo(f"\nProcessed: {success + len(errors)} files", err=True)
         label = "Planned" if dry_run else "Success"
-        click.echo(f"{label}: {result.success}", err=True)
-        if result.errors:
-            click.echo(f"Errors: {len(result.errors)}", err=True)
-            for path, error in result.errors:
+        click.echo(f"{label}: {success}", err=True)
+        if errors:
+            click.echo(f"Errors: {len(errors)}", err=True)
+            for path, error in errors:
                 click.echo(f"  - {path}: {error}", err=True)
 
     # Exit code
-    if result.success == 0:
+    if success == 0:
         sys.exit(2)
-    elif result.errors:
+    elif errors:
         sys.exit(1)
     else:
         sys.exit(0)

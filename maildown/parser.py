@@ -120,13 +120,10 @@ def _get_text_content(part) -> str | None:
         if isinstance(content, str):
             return content
         if isinstance(content, bytes):
-            # Try common encodings
-            for encoding in ["utf-8", "latin-1", "cp1252"]:
-                try:
-                    return content.decode(encoding)
-                except UnicodeDecodeError:
-                    continue
-            return content.decode("utf-8", errors="replace")
+            try:
+                return content.decode("utf-8")
+            except UnicodeDecodeError:
+                return content.decode("latin-1")
     except Exception:
         return None
 
