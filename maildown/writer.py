@@ -2,7 +2,7 @@
 
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from maildown.converter import (
@@ -69,53 +69,86 @@ def _probe_existing_directory(directory: Path) -> bool:
     return _platform_case_insensitive_default()
 
 
-def _fold_key(path: Path) -> str:
-    """Case-folded canonical key used on case-insensitive filesystems."""
-    return str(path).casefold()
-
-
-@dataclass
 class ReservationIndex:
-    """Shared canonical file/directory index for incremental batch planning.
+    """Own destination reservations for incremental batch planning.
 
-    Only successful plans commit their local delta. Reuse an instance rather
-    than a legacy set to avoid rebuilding the directory index for every email.
+    Seed paths are copied and canonicalized once, including file ancestors.
+    Only successful plans commit their staged reservations. Reuse an instance
+    rather than a legacy set to avoid rebuilding the index for every email.
 
-    ``case_insensitive`` is the filesystem's destination-comparison semantics:
-    ``None`` detects it on the first plan and remembers it; ``True``/``False``
-    force it (tests use ``True`` to simulate macOS). When insensitive, folded
-    key sets are kept alongside the canonical ones so case-variant destinations
-    collide; on case-sensitive filesystems they stay empty and behavior is
-    unchanged.
+    ``case_insensitive=None`` adopts the first plan's filesystem comparison
+    semantics. An explicit value must agree with the planner's filesystem probe.
+    Backing sets are private; subsequent changes to seed sets have no effect.
     """
 
-    files: set[Path] = field(default_factory=set)
-    directories: set[Path] = field(default_factory=set)
-    case_insensitive: bool | None = field(default=None, compare=False)
-    folded_files: set[str] = field(default_factory=set)
-    folded_directories: set[str] = field(default_factory=set)
-    _folded_seeded: bool = field(default=False, repr=False, compare=False)
+    def __init__(
+        self,
+        files: set[Path] | None = None,
+        directories: set[Path] | None = None,
+        case_insensitive: bool | None = None,
+    ):
+        self._case_insensitive = case_insensitive
+        canonical_files = {path.resolve() for path in (files or ())}
+        canonical_directories = {path.resolve() for path in (directories or ())}
+        canonical_directories.update(parent for path in canonical_files for parent in path.parents)
+        self._files = {self._key(path) for path in canonical_files}
+        self._directories = {self._key(path) for path in canonical_directories}
 
-    def ensure_case_insensitive(self, probe_path: Path) -> bool:
-        """Detect case semantics once, and seed folded keys on the transition.
+    @property
+    def case_insensitive(self) -> bool | None:
+        """The remembered comparison semantics, or None before detection."""
+        return self._case_insensitive
 
-        A shared index serves a single filesystem: when a plan's destination
-        probe disagrees with the remembered verdict, raise before any
-        reservation for that plan is committed.
-        """
-        verdict = probe_case_insensitive(probe_path)
-        if self.case_insensitive is None:
-            self.case_insensitive = verdict
-        elif self.case_insensitive != verdict:
+    def _key(self, canonical: Path) -> str:
+        key = str(canonical)
+        return key.casefold() if self._case_insensitive else key
+
+    def _begin(self, case_insensitive: bool) -> "_ReservationBatch":
+        """Stage one plan using the planner's read-only filesystem verdict."""
+        if self._case_insensitive is None:
+            self._case_insensitive = case_insensitive
+            if case_insensitive:
+                self._files = {key.casefold() for key in self._files}
+                self._directories = {key.casefold() for key in self._directories}
+        elif self._case_insensitive != case_insensitive:
             raise ValueError(
                 "Destinations span filesystems with different case semantics; "
                 "use a separate ReservationIndex per filesystem"
             )
-        if self.case_insensitive and not self._folded_seeded:
-            self.folded_files.update(_fold_key(path) for path in self.files)
-            self.folded_directories.update(_fold_key(path) for path in self.directories)
-        self._folded_seeded = True
-        return self.case_insensitive
+        return _ReservationBatch(self)
+
+
+class _ReservationBatch:
+    """Private staging for one plan; discarded unless the planner commits it.
+
+    Paths are canonical: the planner resolves them while checking filesystem
+    safety. Membership includes committed destinations without copying them.
+    """
+
+    def __init__(self, index: ReservationIndex):
+        self._index = index
+        self._paths: set[Path] = set()
+        self._files: set[str] = set()
+        self._directories: set[str] = set()
+
+    def known_file(self, canonical: Path) -> bool:
+        key = self._index._key(canonical)
+        return key in self._files or key in self._index._files
+
+    def known_directory(self, canonical: Path) -> bool:
+        key = self._index._key(canonical)
+        return key in self._directories or key in self._index._directories
+
+    def reserve(self, canonical: Path) -> None:
+        self._paths.add(canonical)
+        self._files.add(self._index._key(canonical))
+        self._directories.update(self._index._key(parent) for parent in canonical.parents)
+
+    def commit(self, legacy: set[Path] | None = None) -> None:
+        self._index._files.update(self._files)
+        self._index._directories.update(self._directories)
+        if legacy is not None:
+            legacy.update(self._paths)
 
 
 @dataclass
@@ -161,29 +194,8 @@ def plan_write(
     if isinstance(reservations, ReservationIndex):
         shared = reservations
     else:
-        # Compatibility for callers using the original mutable set API.
-        files = {path.resolve() for path in (reservations or ())}
-        shared = ReservationIndex(files, {parent for path in files for parent in path.parents})
-    insensitive = shared.ensure_case_insensitive(output_path)
-    delta = ReservationIndex()
-
-    def known_file(path: Path) -> bool:
-        """Membership test using the filesystem's own comparison semantics."""
-        if path in shared.files or path in delta.files:
-            return True
-        if insensitive:
-            key = _fold_key(path)
-            return key in shared.folded_files or key in delta.folded_files
-        return False
-
-    def known_directory(path: Path) -> bool:
-        """Reserved-directory membership, folded when the filesystem is."""
-        if path in shared.directories or path in delta.directories:
-            return True
-        if insensitive:
-            key = _fold_key(path)
-            return key in shared.folded_directories or key in delta.folded_directories
-        return False
+        shared = ReservationIndex(reservations)
+    batch = shared._begin(probe_case_insensitive(output_path))
 
     def namespace_blocked(path: Path) -> bool:
         """Only a stem-specific blocker can be avoided by another Markdown name."""
@@ -192,7 +204,7 @@ def plan_write(
         for parent in folder.resolve().parents:
             if parent.exists() and not parent.is_dir():
                 raise NotADirectoryError(f"Output ancestor is not a directory: {parent}")
-        if known_file(folder.resolve()) or (folder.exists() and not folder.is_dir()):
+        if batch.known_file(folder.resolve()) or (folder.exists() and not folder.is_dir()):
             _reject_hardlinks(folder)
             if on_conflict != "rename":
                 raise NotADirectoryError(f"Output ancestor is not a directory: {folder}")
@@ -207,22 +219,22 @@ def plan_write(
         path = Path(os.path.normpath(path))
         _reject_symlinks(path)
         for parent in path.resolve().parents:
-            if known_file(parent) or (parent.exists() and not parent.is_dir()):
+            if batch.known_file(parent) or (parent.exists() and not parent.is_dir()):
                 raise NotADirectoryError(f"Output ancestor is not a directory: {parent}")
         original = path
         counter = 0
         canonical = path.resolve()
         while (
             path.exists()
-            or known_file(canonical)
-            or known_directory(canonical)
+            or batch.known_file(canonical)
+            or batch.known_directory(canonical)
             or (check_namespace and namespace_blocked(path))
         ):
             if (
                 on_conflict == "overwrite"
                 and path.is_file()
-                and not known_file(canonical)
-                and not known_directory(canonical)
+                and not batch.known_file(canonical)
+                and not batch.known_directory(canonical)
             ):
                 _reject_hardlinks(path)
                 break
@@ -232,13 +244,8 @@ def plan_write(
             path = original.with_name(f"{original.stem}_{counter}{original.suffix}")
             _reject_symlinks(path)
             canonical = path.resolve()
-        # Rejected candidates never enter the local delta; only the complete
-        # successful email plan below commits that delta to shared reservations.
-        delta.files.add(canonical)
-        delta.directories.update(canonical.parents)
-        if insensitive:
-            delta.folded_files.add(_fold_key(canonical))
-            delta.folded_directories.update(_fold_key(parent) for parent in canonical.parents)
+        # Only the complete successful plan commits these reservations.
+        batch.reserve(canonical)
         return path
 
     extracts = False
@@ -264,13 +271,7 @@ def plan_write(
                 continue
             name = safe_attachment_name(attachment.filename, index)
             attachments[index] = reserve(folder / name)
-    if isinstance(reservations, ReservationIndex):
-        reservations.files.update(delta.files)
-        reservations.directories.update(delta.directories)
-        reservations.folded_files.update(delta.folded_files)
-        reservations.folded_directories.update(delta.folded_directories)
-    elif reservations is not None:
-        reservations.update(delta.files)
+    batch.commit(reservations if isinstance(reservations, set) else None)
     return WritePlan(output_path, attachments)
 
 

@@ -118,6 +118,12 @@ Batch destinations are reserved in sorted input-path order, including during
 `--dry-run`, using an incremental file/directory index. Python batch callers
 should share a `maildown.writer.ReservationIndex` across calls; the legacy
 `set[Path]` argument remains supported but rebuilds its directory index per call.
+An index can be seeded with `ReservationIndex(files={...}, directories={...})`;
+it copies and canonicalizes these paths once and includes the ancestors of seeded
+files as reserved directories. Later changes to the seed sets do not affect the
+index, and planning does not modify those sets. Reservation storage is private;
+use a shared index through `plan_write` or `write_markdown`. The legacy `set[Path]`
+argument still receives new file reservations after each successful plan.
 Destinations are compared with the filesystem's own case semantics: on
 case-insensitive filesystems (the macOS/Windows default) names differing only
 in case collide, detected once with a read-only probe of the nearest existing
