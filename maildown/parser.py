@@ -136,6 +136,18 @@ def attachment_fallback_name(index: int) -> str:
     return f"attachment_{index + 1}.bin"
 
 
+def safe_attachment_name(name: str | None, index: int) -> str:
+    """Return *name* unchanged when it is safe, else the positional fallback.
+
+    Names that are empty, dot/dot-dot, or contain path separators, a colon,
+    or a NUL byte cannot be used as a filename and get the deterministic
+    ``attachment_<1-based-position>.bin`` fallback for *index*.
+    """
+    if not name or name in (".", "..") or any(c in name for c in "/\\:\x00"):
+        return attachment_fallback_name(index)
+    return name
+
+
 def _extract_attachment(part, result: ParsedEmail) -> None:
     """Extract attachment from email part."""
     filename = part.get_filename() or attachment_fallback_name(len(result.attachments))

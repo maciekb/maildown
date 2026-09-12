@@ -72,7 +72,10 @@ colon, or NUL) become `attachment_<1-based-position>.bin` deterministically.
 Missing or empty MIME filenames use the same positional fallback during parsing.
 Links use each attachment's actual final filename, with URL special characters
 percent-encoded, including renamed duplicates. The original name remains the
-link label. Embedded images are **not also extracted**; images of exactly
+link label. When no final filename is supplied (direct `convert_to_markdown`
+use), unsafe names get the same deterministic `attachment_<position>.bin`
+fallback, so converter links never point outside the attachment directory.
+Embedded images are **not also extracted**; images of exactly
 100,000 bytes and all non-images are extracted. Image eligibility uses the MIME
 content type, not image decoding or validation.
 
@@ -109,6 +112,10 @@ Batch destinations are reserved in sorted input-path order, including during
 `--dry-run`, using an incremental file/directory index. Python batch callers
 should share a `maildown.writer.ReservationIndex` across calls; the legacy
 `set[Path]` argument remains supported but rebuilds its directory index per call.
+Destinations are compared with the filesystem's own case semantics: on
+case-insensitive filesystems (the macOS/Windows default) names differing only
+in case collide, detected once with a read-only probe of the nearest existing
+directory ancestor; case-sensitive filesystems are unchanged.
 Failed plans do not commit reservations. Reservations from a successful plan
 remain if a later write fails, since partial files may already exist.
 

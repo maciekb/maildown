@@ -9,7 +9,7 @@ from urllib.parse import quote
 
 from markdownify import markdownify
 
-from maildown.parser import Attachment, ParsedEmail
+from maildown.parser import Attachment, ParsedEmail, safe_attachment_name
 
 
 class AttachmentMode(Enum):
@@ -172,6 +172,28 @@ def _get_body(email: ParsedEmail, options: ConversionOptions) -> str:
         return ""
 
 
+def _attachment_link_path(
+    index: int,
+    attachment: Attachment,
+    options: ConversionOptions,
+    base_path: str | None,
+    attachment_paths: dict[int, str] | None,
+) -> str:
+    """Return the unquoted link path for a non-embedded attachment.
+
+    A caller-supplied override always wins unchanged. Otherwise the filename
+    gets the same safety fallback used when extracting, so links never point
+    outside the attachment directory.
+    """
+    override = (attachment_paths or {}).get(index)
+    if override is not None:
+        return override
+    name = safe_attachment_name(attachment.filename, index)
+    if base_path:
+        return f"{base_path}/{name}"
+    return f"./{options.attachments_dir}/{name}"
+
+
 def _format_attachments(
     attachments: list[Attachment],
     options: ConversionOptions,
@@ -189,11 +211,8 @@ def _format_attachments(
             lines.append(f"- {att.filename} ({size_str})")
 
         elif options.attachment_mode == AttachmentMode.EXTRACT:
-            if base_path:
-                link_path = f"{base_path}/{att.filename}"
-            else:
-                link_path = f"./{options.attachments_dir}/{att.filename}"
-            link_path = quote((attachment_paths or {}).get(index, link_path), safe="/")
+            link_path = _attachment_link_path(index, att, options, base_path, attachment_paths)
+            link_path = quote(link_path, safe="/")
             lines.append(f"- [{label}]({link_path}) ({size_str})")
 
         elif options.attachment_mode == AttachmentMode.EMBED:
@@ -202,11 +221,8 @@ def _format_attachments(
                 lines.append(f"\n![{label}](data:{att.content_type};base64,{encoded})\n")
             else:
                 # Too large or not an image - fall back to extract behavior
-                if base_path:
-                    link_path = f"{base_path}/{att.filename}"
-                else:
-                    link_path = f"./{options.attachments_dir}/{att.filename}"
-                link_path = quote((attachment_paths or {}).get(index, link_path), safe="/")
+                link_path = _attachment_link_path(index, att, options, base_path, attachment_paths)
+                link_path = quote(link_path, safe="/")
                 lines.append(f"- [{label}]({link_path}) ({size_str})")
 
     return "\n".join(lines)
