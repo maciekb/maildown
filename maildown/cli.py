@@ -10,7 +10,7 @@ import click
 from maildown import __version__
 from maildown.converter import AttachmentMode, ConversionOptions
 from maildown.parser import parse_eml
-from maildown.writer import determine_output_path, write_markdown
+from maildown.writer import ReservationIndex, determine_output_path, plan_write, write_markdown
 
 
 @dataclass
@@ -47,10 +47,7 @@ def collect_files(inputs: tuple[str, ...], recursive: bool) -> list[Path]:
             files.extend(path.glob(pattern))
         elif "*" in input_path or "?" in input_path:
             # Glob pattern
-            if recursive:
-                matches = glob.glob(input_path, recursive=True)
-            else:
-                matches = glob.glob(input_path)
+            matches = glob.glob(input_path, recursive=recursive)
             files.extend(Path(m) for m in matches if Path(m).is_file())
         else:
             # Path doesn't exist - will be handled as error during processing
@@ -88,6 +85,13 @@ def collect_files(inputs: tuple[str, ...], recursive: bool) -> list[Path]:
     default="attachments",
     help="Directory for extracted attachments (default: attachments)",
 )
+@click.option(
+    "--on-conflict",
+    type=click.Choice(["error", "rename", "overwrite"]),
+    default="error",
+    show_default=True,
+    help="Policy for existing output and attachment files",
+)
 @click.option("--fail-fast", is_flag=True, help="Stop on first error")
 @click.option("-v", "--verbose", is_flag=True, help="Verbose output")
 @click.option("-q", "--quiet", is_flag=True, help="Only show errors")
@@ -104,6 +108,7 @@ def main(
     include_headers: str,
     attachments: str,
     attachments_dir: str,
+    on_conflict: str,
     fail_fast: bool,
     verbose: bool,
     quiet: bool,
@@ -119,7 +124,7 @@ def main(
 
         maildown ./inbox/
 
-        maildown ./mail/ -r -o ./converted/
+        maildown ./mail/ -r --preserve-structure -o ./converted/
 
         maildown "*.eml" --attachments=extract
     """
@@ -151,6 +156,7 @@ def main(
 
     # Process files
     result = ProcessingResult()
+    reservations = ReservationIndex()
 
     for file_path in files:
         try:
@@ -171,9 +177,17 @@ def main(
             )
 
             if dry_run:
-                click.echo(f"Would write: {output_path}")
+                plan = plan_write(
+                    email, output_path, options, on_conflict=on_conflict, reservations=reservations
+                )
+                if not quiet:
+                    click.echo(f"Would write: {plan.output_path}")
+                    for path in plan.attachments.values():
+                        click.echo(f"Would extract: {path}")
             else:
-                write_markdown(email, output_path, options)
+                output_path = write_markdown(
+                    email, output_path, options, on_conflict=on_conflict, reservations=reservations
+                )
                 if not quiet:
                     click.echo(f"Created: {output_path}")
 
@@ -183,8 +197,7 @@ def main(
             error_msg = str(e)
             result.errors.append((file_path, error_msg))
 
-            if not quiet:
-                click.echo(f"Error processing {file_path}: {error_msg}", err=True)
+            click.echo(f"Error processing {file_path}: {error_msg}", err=True)
 
             if fail_fast:
                 break
@@ -192,7 +205,8 @@ def main(
     # Print summary
     if not quiet:
         click.echo(f"\nProcessed: {result.success + len(result.errors)} files", err=True)
-        click.echo(f"Success: {result.success}", err=True)
+        label = "Planned" if dry_run else "Success"
+        click.echo(f"{label}: {result.success}", err=True)
         if result.errors:
             click.echo(f"Errors: {len(result.errors)}", err=True)
             for path, error in result.errors:

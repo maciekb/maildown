@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from maildown.parser import parse_eml
+from maildown.parser import parse_eml, safe_attachment_name
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -104,3 +104,34 @@ class TestErrorHandling:
     def test_file_not_found(self):
         with pytest.raises(FileNotFoundError):
             parse_eml(Path("/nonexistent/file.eml"))
+
+
+class TestSafeAttachmentName:
+    @pytest.mark.parametrize("name", ["report.txt", "image 1.png", "zażółć.txt", "name[1].txt"])
+    def test_safe_names_pass_through(self, name):
+        assert safe_attachment_name(name, 0) == name
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            None,
+            "",
+            ".",
+            "..",
+            "../../outside.txt",
+            "../escape",
+            "..\\escape",
+            "/absolute",
+            "C:\\escape",
+            "C:escape",
+            "a/b",
+            "a\\b",
+            "a:b",
+            "a\x00b",
+        ],
+    )
+    def test_unsafe_names_use_positional_fallback(self, name):
+        assert safe_attachment_name(name, 0) == "attachment_1.bin"
+
+    def test_fallback_uses_index(self):
+        assert safe_attachment_name("", 4) == "attachment_5.bin"

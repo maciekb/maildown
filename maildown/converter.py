@@ -5,10 +5,11 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from enum import Enum
+from urllib.parse import quote
 
 from markdownify import markdownify
 
-from maildown.parser import Attachment, ParsedEmail
+from maildown.parser import Attachment, ParsedEmail, safe_attachment_name
 
 
 class AttachmentMode(Enum):
@@ -77,6 +78,7 @@ def convert_to_markdown(
     email: ParsedEmail,
     options: ConversionOptions | None = None,
     attachment_base_path: str | None = None,
+    attachment_paths: dict[int, str] | None = None,
 ) -> str:
     """Convert parsed email to Markdown format.
 
@@ -84,6 +86,8 @@ def convert_to_markdown(
         email: Parsed email data.
         options: Conversion options.
         attachment_base_path: Base path for attachment links (used with extract mode).
+        attachment_paths: Final relative paths by zero-based attachment position;
+            overrides filename-derived links. Pass unquoted paths (URLs are quoted here).
 
     Returns:
         Markdown formatted string.
@@ -122,7 +126,9 @@ def convert_to_markdown(
 
     # Add attachments section
     if email.attachments and options.attachment_mode != AttachmentMode.IGNORE:
-        attachments_md = _format_attachments(email.attachments, options, attachment_base_path)
+        attachments_md = _format_attachments(
+            email.attachments, options, attachment_base_path, attachment_paths
+        )
         if attachments_md:
             parts.append(attachments_md)
 
@@ -166,45 +172,69 @@ def _get_body(email: ParsedEmail, options: ConversionOptions) -> str:
         return ""
 
 
+def _attachment_link_path(
+    index: int,
+    attachment: Attachment,
+    options: ConversionOptions,
+    base_path: str | None,
+    attachment_paths: dict[int, str] | None,
+) -> str:
+    """Return the unquoted link path for a non-embedded attachment.
+
+    A caller-supplied override always wins unchanged. Otherwise the filename
+    gets the same safety fallback used when extracting, so links never point
+    outside the attachment directory.
+    """
+    override = (attachment_paths or {}).get(index)
+    if override is not None:
+        return override
+    name = safe_attachment_name(attachment.filename, index)
+    if base_path:
+        return f"{base_path}/{name}"
+    return f"./{options.attachments_dir}/{name}"
+
+
 def _format_attachments(
     attachments: list[Attachment],
     options: ConversionOptions,
     base_path: str | None,
+    attachment_paths: dict[int, str] | None = None,
 ) -> str:
     """Format attachments section."""
     lines = ["\n## Attachments\n"]
 
-    for att in attachments:
+    for index, att in enumerate(attachments):
         size_str = format_size(att.size)
+        label = att.filename.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
 
         if options.attachment_mode == AttachmentMode.LIST:
             lines.append(f"- {att.filename} ({size_str})")
 
         elif options.attachment_mode == AttachmentMode.EXTRACT:
-            if base_path:
-                link_path = f"{base_path}/{att.filename}"
-            else:
-                link_path = f"./{options.attachments_dir}/{att.filename}"
-            lines.append(f"- [{att.filename}]({link_path}) ({size_str})")
+            link_path = _attachment_link_path(index, att, options, base_path, attachment_paths)
+            link_path = quote(link_path, safe="/")
+            lines.append(f"- [{label}]({link_path}) ({size_str})")
 
         elif options.attachment_mode == AttachmentMode.EMBED:
-            if _is_image(att.content_type) and att.size < 100_000:  # <100KB for embed
+            if should_embed(att, options):
                 encoded = base64.b64encode(att.content).decode("ascii")
-                lines.append(f"\n![{att.filename}](data:{att.content_type};base64,{encoded})\n")
+                lines.append(f"\n![{label}](data:{att.content_type};base64,{encoded})\n")
             else:
                 # Too large or not an image - fall back to extract behavior
-                if base_path:
-                    link_path = f"{base_path}/{att.filename}"
-                else:
-                    link_path = f"./{options.attachments_dir}/{att.filename}"
-                lines.append(f"- [{att.filename}]({link_path}) ({size_str})")
+                link_path = _attachment_link_path(index, att, options, base_path, attachment_paths)
+                link_path = quote(link_path, safe="/")
+                lines.append(f"- [{label}]({link_path}) ({size_str})")
 
     return "\n".join(lines)
 
 
-def _is_image(content_type: str) -> bool:
-    """Check if content type is an image."""
-    return content_type.startswith("image/")
+def should_embed(attachment: Attachment, options: ConversionOptions) -> bool:
+    """Embed only images strictly smaller than 100,000 decoded bytes."""
+    return (
+        options.attachment_mode == AttachmentMode.EMBED
+        and attachment.content_type.startswith("image/")
+        and attachment.size < 100_000
+    )
 
 
 def generate_filename(email: ParsedEmail, pattern: str = "{date}-{subject}") -> str:
