@@ -6,6 +6,7 @@ Convert EML files to Markdown.
 
 ```bash
 git clone https://github.com/maciekb/maildown.git
+cd maildown
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
@@ -178,6 +179,20 @@ Email body content here...
 | 0 | Success |
 | 1 | Partial success (some errors) |
 | 2 | Complete failure |
+
+## Development
+
+See [AGENTS.md](AGENTS.md) for environment setup, validation commands, and
+project guidance shared by human contributors, Codex, and Claude Code.
+Claude Code loads the same instructions through the import in `CLAUDE.md`.
+Keep shared instructions in `AGENTS.md` and detailed skill configuration in
+[`docs/agents/`](docs/agents/).
+
+The shell examples use Linux/macOS paths. On Windows, use the corresponding
+executables under `.venv/Scripts/`.
+
+GitHub Actions runs pytest, Ruff lint, and Ruff formatting checks for pushes
+and pull requests on Python 3.10, 3.11, and 3.12.
 
 ## License
 
