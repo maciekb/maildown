@@ -60,8 +60,7 @@ def test_reserved_stems_retry_without_leaking_candidate_reservations(tmp_path, l
     for name in ("mail", "mail_1"):
         plan_write(ParsedEmail(), tmp_path / "attachments" / name, reservations=reservations)
     plan_write(ParsedEmail(), tmp_path / "mail_2.md", reservations=reservations)
-    files = reservations.files if isinstance(reservations, ReservationIndex) else reservations
-    before = files.copy()
+    before = reservations.copy() if legacy else None
     plan = plan_write(
         ParsedEmail(attachments=[Attachment("file.txt", "text/plain", 1, b"x")]),
         tmp_path / "mail.md",
@@ -71,11 +70,16 @@ def test_reserved_stems_retry_without_leaking_candidate_reservations(tmp_path, l
     )
     assert plan.output_path == tmp_path / "mail_3.md"
     assert plan.attachments == {0: tmp_path / "attachments/mail_3/file.txt"}
-    expected = before | {plan.output_path, *plan.attachments.values()}
-    assert files == expected
-    if isinstance(reservations, ReservationIndex):
-        assert reservations.files is files
-        assert reservations.directories == {parent for path in expected for parent in path.parents}
+    if legacy:
+        assert reservations == before | {plan.output_path, *plan.attachments.values()}
+    for path in (plan.output_path, *plan.attachments.values()):
+        with pytest.raises(FileExistsError):
+            plan_write(ParsedEmail(), path, reservations=reservations)
+    for name in ("mail.md", "mail_1.md"):
+        assert (
+            plan_write(ParsedEmail(), tmp_path / name, reservations=reservations).output_path
+            == tmp_path / name
+        )
     assert not list(tmp_path.iterdir())
 
 
@@ -94,7 +98,10 @@ def test_rename_rejects_hardlinked_stem_instead_of_retrying(tmp_path, bounded_pa
             on_conflict="rename",
             reservations=reservations,
         )
-    assert reservations == ReservationIndex()
+    assert (
+        plan_write(ParsedEmail(), tmp_path / "mail.md", reservations=reservations).output_path
+        == tmp_path / "mail.md"
+    )
     assert sentinel.read_bytes() == blocked.read_bytes() == b"original"
     assert not (tmp_path / "mail_1.md").exists()
 
@@ -128,11 +135,7 @@ def test_common_ancestor_failure_is_bounded_and_atomic(
         plan_write(ParsedEmail(), blocked, reservations=reservations)
     else:
         blocked.write_bytes(b"original")
-    files = reservations.files if isinstance(reservations, ReservationIndex) else reservations
-    before = files.copy()
-    directories = (
-        reservations.directories.copy() if isinstance(reservations, ReservationIndex) else None
-    )
+    before = reservations.copy() if legacy else None
     with pytest.raises(NotADirectoryError, match="Output ancestor"):
         plan_write(
             ParsedEmail(attachments=[Attachment("file.txt", "text/plain", 1, b"x")]),
@@ -141,12 +144,12 @@ def test_common_ancestor_failure_is_bounded_and_atomic(
             on_conflict="rename",
             reservations=reservations,
         )
-    assert files == before
-    if isinstance(reservations, ReservationIndex):
-        assert reservations.directories == directories
+    if legacy:
+        assert reservations == before
     if not reserved:
         assert blocked.read_bytes() == b"original"
     assert not (tmp_path / "mail.md").exists()
+    plan_write(ParsedEmail(), tmp_path / "mail.md", reservations=reservations)
 
 
 @pytest.mark.parametrize("legacy", [False, True])
@@ -157,11 +160,7 @@ def test_security_failure_after_retry_discards_entire_delta(
 ):
     reservations = set() if legacy else ReservationIndex()
     plan_write(ParsedEmail(), tmp_path / "unrelated.md", reservations=reservations)
-    files = reservations.files if isinstance(reservations, ReservationIndex) else reservations
-    before = files.copy()
-    directories = (
-        reservations.directories.copy() if isinstance(reservations, ReservationIndex) else None
-    )
+    before = reservations.copy() if legacy else None
     blocked = tmp_path / "attachments/mail"
     blocked.parent.mkdir()
     blocked.write_bytes(b"blocker")
@@ -183,24 +182,42 @@ def test_security_failure_after_retry_discards_entire_delta(
             on_conflict="rename",
             reservations=reservations,
         )
-    assert files == before
-    if isinstance(reservations, ReservationIndex):
-        assert reservations.directories == directories
+    if legacy:
+        assert reservations == before
     assert link.is_symlink()
     assert blocked.read_bytes() == b"blocker"
     assert not (tmp_path / "mail_1.md").exists()
     if not dangling:
         assert sentinel.read_bytes() == b"original"
+    # Removing the filesystem blocker makes the same candidate reusable.
+    link.unlink()
+    if location == "late_attachment":
+        link.parent.rmdir()
+    bounded_path_checks.clear()
+    plan_write(ParsedEmail(), tmp_path / "mail_1.md", reservations=reservations)
+    plan_write(ParsedEmail(), tmp_path / "attachments/mail_1", reservations=reservations)
+    with pytest.raises(FileExistsError):
+        plan_write(ParsedEmail(), tmp_path / "unrelated.md", reservations=reservations)
 
 
-def test_retry_does_not_scan_or_replace_shared_index(tmp_path):
+@pytest.mark.parametrize("case_insensitive", [False, True])
+def test_retry_does_not_scan_shared_index(tmp_path, monkeypatch, case_insensitive):
+    from maildown import writer
+
+    monkeypatch.setattr(writer, "probe_case_insensitive", lambda path: case_insensitive)
+
     class MembershipOnlySet(set):
         def __iter__(self):
             pytest.fail("Incremental planning must not scan shared reservations")
 
-    files = MembershipOnlySet({tmp_path / "attachments/mail"})
-    directories = MembershipOnlySet((tmp_path / "attachments/mail").parents)
-    reservations = ReservationIndex(files, directories)
+        def copy(self):
+            pytest.fail("Incremental planning must not copy shared reservations")
+
+    reservations = ReservationIndex()
+    plan_write(ParsedEmail(), tmp_path / "attachments/mail", reservations=reservations)
+    # Instrument only after the initial plan: seed ingestion and case detection may scan once.
+    reservations._files = MembershipOnlySet(reservations._files)
+    reservations._directories = MembershipOnlySet(reservations._directories)
     plan = plan_write(
         ParsedEmail(attachments=[Attachment("file.txt", "text/plain", 1, b"x")]),
         tmp_path / "mail.md",
@@ -209,10 +226,10 @@ def test_retry_does_not_scan_or_replace_shared_index(tmp_path):
         reservations=reservations,
     )
     assert plan.output_path == tmp_path / "mail_1.md"
-    assert reservations.files is files
-    assert reservations.directories is directories
-    assert len(files) == 3
-    assert tmp_path / "mail.md" not in files
+    assert (
+        plan_write(ParsedEmail(), tmp_path / "mail.md", reservations=reservations).output_path
+        == tmp_path / "mail.md"
+    )
 
 
 def test_embedded_only_email_still_validates_attachment_directory(tmp_path):
@@ -255,7 +272,10 @@ def test_nonrename_policy_rejects_blocked_stem(tmp_path, bounded_path_checks, po
             on_conflict=policy,
             reservations=reservations,
         )
-    assert reservations == ReservationIndex()
+    assert (
+        plan_write(ParsedEmail(), tmp_path / "mail.md", reservations=reservations).output_path
+        == tmp_path / "mail.md"
+    )
     assert blocked.read_bytes() == b"original"
 
 

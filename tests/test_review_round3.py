@@ -148,22 +148,23 @@ class TestSingleFilesystemContract:
         index = writer.ReservationIndex(case_insensitive=True)
         with pytest.raises(ValueError, match="different case semantics"):
             plan_write(message("file.txt"), tmp_path / "mail.md", EXTRACT, reservations=index)
-        assert index.files == set() and index.directories == set()
-        assert index.folded_files == set() and index.folded_directories == set()
+        monkeypatch.setattr(writer, "_case_probe_cache", {str(tmp_path): True})
+        plan_write(message("file.txt"), tmp_path / "mail.md", EXTRACT, reservations=index)
 
     def test_conflicting_probe_verdict_message_names_the_remedy(self, tmp_path, monkeypatch):
         monkeypatch.setattr(writer, "probe_case_insensitive", lambda path: False)
         index = writer.ReservationIndex(case_insensitive=True)
         with pytest.raises(ValueError, match="use a separate ReservationIndex per filesystem"):
             plan_write(message(), tmp_path / "mail.md", reservations=index)
-        assert index.files == set()
 
     def test_matching_verdicts_plan_across_multiple_emails(self, tmp_path, monkeypatch):
         monkeypatch.setattr(writer, "probe_case_insensitive", lambda path: True)
         index = writer.ReservationIndex(case_insensitive=True)
         plan_write(message("a.txt"), tmp_path / "one.md", EXTRACT, reservations=index)
         plan_write(message("b.txt"), tmp_path / "two.md", EXTRACT, reservations=index)
-        assert len(index.files) == 4
+        for path in ("ONE.md", "TWO.md", "attachments/one/A.txt", "attachments/two/B.txt"):
+            with pytest.raises(FileExistsError):
+                plan_write(message(), tmp_path / path, reservations=index)
 
     def test_first_plan_stores_probed_verdict(self, tmp_path):
         index = writer.ReservationIndex()

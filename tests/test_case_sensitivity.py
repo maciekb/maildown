@@ -122,8 +122,8 @@ class TestFoldedReservations:
         with pytest.raises(FileExistsError):
             write_markdown(case_variant_email(), tmp_path / "mail.md", EXTRACT, reservations=index)
         assert not list(tmp_path.iterdir())
-        assert index.files == set()
-        assert index.folded_files == set()
+        writer.plan_write(ParsedEmail(), tmp_path / "MAIL.md", reservations=index)
+        writer.plan_write(ParsedEmail(), tmp_path / "ATTACHMENTS/MAIL", reservations=index)
 
     def test_rename_policy_keeps_case_variant_attachments_distinct(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
@@ -152,7 +152,7 @@ class TestFoldedReservations:
                 reservations=index,
             )
         assert not list(tmp_path.iterdir())
-        assert index.files == set() and index.folded_files == set()
+        writer.plan_write(ParsedEmail(), tmp_path / "MAIL.md", reservations=index)
 
     def test_overwrite_rejects_duplicates_when_case_variant_exists_on_disk(
         self, tmp_path, macos_probe
@@ -184,7 +184,6 @@ class TestFoldedReservations:
         text = output.read_text()
         assert "(./attachments/mail/foo.txt)" in text
         assert "(./attachments/mail/FOO.txt)" in text
-        assert index.folded_files == set() and index.folded_directories == set()
 
     def test_undetected_index_keeps_case_variants_distinct_on_sensitive_host(self, tmp_path):
         if writer.probe_case_insensitive(tmp_path):
@@ -246,7 +245,7 @@ class TestFoldedReservations:
         assert "Planned: 0" in result.output
         assert not list(tmp_path.glob("**/attachments"))
 
-    def test_detection_backfills_folded_keys_for_existing_reservations(self, tmp_path, monkeypatch):
+    def test_detection_applies_case_semantics_to_seeded_reservations(self, tmp_path, monkeypatch):
         reserved = (tmp_path / "attachments" / "mail" / "foo.txt").resolve()
         index = writer.ReservationIndex({reserved}, {reserved.parent, tmp_path.resolve()})
         monkeypatch.setattr(writer, "_case_probe_cache", {})
@@ -259,11 +258,10 @@ class TestFoldedReservations:
                 reservations=index,
             )
         assert index.case_insensitive is True
-        assert writer._fold_key(reserved) in index.folded_files
 
-    def test_rename_plan_commits_exactly_the_final_folded_destinations(self, tmp_path, macos_probe):
+    def test_rename_plan_reserves_final_case_variant_destinations(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
-        write_markdown(
+        plan = writer.plan_write(
             case_variant_email(),
             tmp_path / "mail.md",
             EXTRACT,
@@ -271,13 +269,16 @@ class TestFoldedReservations:
             reservations=index,
         )
         folder = tmp_path / "attachments" / "mail"
-        assert index.files == {
-            (tmp_path / "mail.md").resolve(),
-            (folder / "foo.txt").resolve(),
-            (folder / "FOO_1.txt").resolve(),
-        }
-        assert index.folded_files == {writer._fold_key(path) for path in index.files}
-        assert index.folded_directories == {writer._fold_key(path) for path in index.directories}
+        assert plan.attachments == {0: folder / "foo.txt", 1: folder / "FOO_1.txt"}
+        for path in (tmp_path / "MAIL.md", folder / "FOO.txt", folder / "foo_1.txt"):
+            with pytest.raises(FileExistsError):
+                writer.plan_write(ParsedEmail(), path, reservations=index)
+        with pytest.raises(FileExistsError):
+            writer.plan_write(ParsedEmail(), tmp_path / "ATTACHMENTS/MAIL", reservations=index)
+        assert (
+            writer.plan_write(ParsedEmail(), folder / "foo_2.txt", reservations=index).output_path
+            == folder / "foo_2.txt"
+        )
 
     def test_stem_namespace_blocked_by_case_variant_reserved_file(self, tmp_path, macos_probe):
         index = writer.ReservationIndex(case_insensitive=True)
